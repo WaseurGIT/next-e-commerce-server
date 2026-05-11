@@ -30,6 +30,9 @@ async function run() {
     const fansCollection = client.db("nextECommerce").collection("fans");
     const usersCollection = client.db("nextECommerce").collection("users");
     const cartsCollection = client.db("nextECommerce").collection("carts");
+    const trendingsCollection = client
+      .db("nextECommerce")
+      .collection("trendings");
 
     app.post("/watches", async (req, res) => {
       try {
@@ -88,6 +91,26 @@ async function run() {
         res.send(fans);
       } catch (error) {
         console.error("Error fetching fans:", error);
+        res.status(500).send("Internal Server Error");
+      }
+    });
+
+    app.post("/trendings", async (req, res) => {
+      try {
+        const trending = req.body;
+        const result = await trendingsCollection.insertOne(trending);
+        res.send(result);
+      } catch (error) {
+        console.error("Error inserting trending item:", error);
+        res.status(500).send("Internal Server Error");
+      }
+    });
+    app.get("/trendings", async (req, res) => {
+      try {
+        const trendings = await trendingsCollection.find().toArray();
+        res.send(trendings);
+      } catch (error) {
+        console.error("Error fetching trending items:", error);
         res.status(500).send("Internal Server Error");
       }
     });
