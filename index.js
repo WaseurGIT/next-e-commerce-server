@@ -2,6 +2,8 @@ const express = require("express");
 const app = express();
 const cors = require("cors");
 const dotenv = require("dotenv");
+const bcrypt = require("bcrypt");
+const jwt = require("jsonwebtoken");
 dotenv.config();
 const PORT = process.env.PORT || 5000;
 
@@ -20,6 +22,22 @@ const client = new MongoClient(uri, {
   },
 });
 
+const verifyToken = (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      return res.status(401).send({ message: "Unauthorized" });
+    }
+    const token = authHeader.split(" ")[1];
+
+    const decoded = jwt.verify(token, process.env.SECRET_KEY);
+    req.user = decoded;
+    next();
+  } catch (error) {
+    return res.status(403).send({ message: "Invalid or expired token" });
+  }
+};
+
 async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
@@ -34,7 +52,87 @@ async function run() {
       .db("nextECommerce")
       .collection("trendings");
 
-    app.post("/watches", async (req, res) => {
+    app.post("/users", async (req, res) => {
+      try {
+        const user = req.body;
+
+        if (
+          !user.email ||
+          !user.name ||
+          !user.password ||
+          user.email.trim() === "" ||
+          user.name.trim() === "" ||
+          user.password.trim() === ""
+        ) {
+          return res.status(400).send({
+            message: "Email, name, and password are required",
+          });
+        }
+
+        const existingUser = await usersCollection.findOne({
+          email: user.email,
+        });
+
+        if (existingUser) {
+          return res.status(400).send({ message: "User already exists" });
+        }
+
+        const hashedPassword = await bcrypt.hash(user.password, 12);
+        const userWithHashedPassword = { ...user, password: hashedPassword };
+
+        const result = await usersCollection.insertOne(userWithHashedPassword);
+        res.send(result);
+      } catch (error) {
+        console.error("Error creating new user:", error);
+        res.status(500).send("Internal Server Error");
+      }
+    });
+
+    app.post("/login", async (req, res) => {
+      try {
+        const { email, password } = req.body;
+        const user = await usersCollection.findOne({ email });
+        if (!user) {
+          return res.status(400).send({ message: "Invalid email or password" });
+        }
+        const isPasswordValid = await bcrypt.compare(password, user.password);
+        if (!isPasswordValid) {
+          return res.status(400).send({ message: "Invalid email or password" });
+        }
+
+        const token = jwt.sign({ userId: user._id }, process.env.SECRET_KEY, {
+          expiresIn: "7d",
+        });
+
+        res.send({
+          message: "Login successful",
+          userId: user._id,
+          token: token,
+        });
+      } catch (error) {
+        console.error("Error during login:", error);
+        res.status(500).send("Internal Server Error");
+      }
+    });
+
+    app.post("/me", verifyToken, async (req, res) => {
+      try {
+        const { userId } = req.body;
+        const user = await usersCollection.findOne(
+          { _id: new ObjectId(req.user.userId) },
+          { projection: { password: 0 } },
+        );
+        if (!user) {
+          return res.status(404).send({ message: "User not found" });
+        }
+        res.send(user);
+      } catch (error) {
+        console.error("Error fetching user details:", error);
+        res.status(500).send("Internal Server Error");
+      }
+    });
+
+    app.post("/watches", verifyToken, async (req, res) => {
       try {
         const watch = req.body;
 
@@ -55,7 +153,7 @@ async function run() {
       }
     });
 
-    app.post("/clocks", async (req, res) => {
+    app.post("/clocks", verifyToken, async (req, res) => {
       try {
         const clock = req.body;
         const result = await clockCollection.insertOne(clock);
@@ -75,7 +173,7 @@ async function run() {
       }
     });
 
-    app.post("/fans", async (req, res) => {
+    app.post("/fans", verifyToken, async (req, res) => {
       try {
         const fan = req.body;
         const result = await fansCollection.insertOne(fan);
@@ -95,7 +193,7 @@ async function run() {
       }
     });
 
-    app.post("/trendings", async (req, res) => {
+    app.post("/trendings", verifyToken, async (req, res) => {
       try {
         const trending = req.body;
         const result = await trendingsCollection.insertOne(trending);
@@ -115,9 +213,10 @@ async function run() {
       }
     });
 
-    app.post("/carts", async (req, res) => {
+    app.post("/carts", verifyToken, async (req, res) => {
       try {
-        const { productId, userId, quantity } = req.body;
+        const userId = req.user.userId;
+        const { productId, quantity } = req.body;
 
         const existingCart = await cartsCollection.findOne({
           productId,
@@ -140,13 +239,13 @@ async function run() {
       }
     });
 
-    app.get("/carts/:userId", async (req, res) => {
-      const userId = req.params.userId;
+    app.get("/carts/:userId", verifyToken, async (req, res) => {
+      const userId = req.user.userId;
       const result = await cartsCollection.find({ userId }).toArray();
       res.send(result);
     });
 
-    app.delete("/carts/:id", async (req, res) => {
+    app.delete("/carts/:id", verifyToken, async (req, res) => {
       const id = req.params.id;
       const result = await cartsCollection.deleteOne({
         _id: new ObjectId(id),
@@ -154,7 +253,7 @@ async function run() {
       res.send(result);
     });
 
-    app.patch("/carts/:id", async (req, res) => {
+    app.patch("/carts/:id", verifyToken, async (req, res) => {
       const id = req.params.id;
       const { quantity } = req.body;
 
