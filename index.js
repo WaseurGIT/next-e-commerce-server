@@ -77,29 +77,24 @@ async function run() {
         }
 
         const hashedPassword = await bcrypt.hash(user.password, 12);
-        const userWithHashedPassword = { ...user, password: hashedPassword };
+        const newUser = {
+          name: user.name,
+          email: user.email,
+          password: hashedPassword,
+          role: "user",
+          createdAt: new Date(),
+        };
 
-        const result = await usersCollection.insertOne(userWithHashedPassword);
-        const token = jwt.sign(
-          { userId: result.insertedId },
-          process.env.SECRET_KEY,
-          {
-            expiresIn: "7d",
-          },
-        );
-
-        res.cookie("token", token, {
-          httpOnly: true,
-          secure: false,
-          sameSite: "lax",
-          path: "/",
-          maxAge: 7 * 24 * 60 * 60 * 1000,
-        });
-
+        const result = await usersCollection.insertOne(newUser);
         res.send({
           success: true,
-          insertedId: result.insertedId,
-          message: "Registration successful",
+          user: {
+            _id: result.insertedId,
+            name: newUser.name,
+            email: newUser.email,
+            role: newUser.role,
+            createdAt: newUser.createdAt,
+          },
         });
       } catch (error) {
         console.error("Error creating new user:", error);
