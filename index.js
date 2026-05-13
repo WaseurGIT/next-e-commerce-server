@@ -4,11 +4,18 @@ const cors = require("cors");
 const dotenv = require("dotenv");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
+const cookieParser = require("cookie-parser");
 dotenv.config();
 const PORT = process.env.PORT || 5000;
 
-app.use(cors());
+app.use(
+  cors({
+    origin: "http://localhost:3000",
+    credentials: true,
+  }),
+);
 app.use(express.json());
+app.use(cookieParser());
 
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.febqytm.mongodb.net/?appName=Cluster0`;
@@ -24,11 +31,10 @@ const client = new MongoClient(uri, {
 
 const verifyToken = (req, res, next) => {
   try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader) {
+    const token = req.cookies.token;
+    if (!token) {
       return res.status(401).send({ message: "Unauthorized" });
     }
-    const token = authHeader.split(" ")[1];
 
     const decoded = jwt.verify(token, process.env.SECRET_KEY);
     req.user = decoded;
@@ -56,14 +62,7 @@ async function run() {
       try {
         const user = req.body;
 
-        if (
-          !user.email ||
-          !user.name ||
-          !user.password ||
-          user.email.trim() === "" ||
-          user.name.trim() === "" ||
-          user.password.trim() === ""
-        ) {
+        if (!user.email || !user.name || !user.password) {
           return res.status(400).send({
             message: "Email, name, and password are required",
           });
@@ -81,7 +80,27 @@ async function run() {
         const userWithHashedPassword = { ...user, password: hashedPassword };
 
         const result = await usersCollection.insertOne(userWithHashedPassword);
-        res.send(result);
+        const token = jwt.sign(
+          { userId: result.insertedId },
+          process.env.SECRET_KEY,
+          {
+            expiresIn: "7d",
+          },
+        );
+
+        res.cookie("token", token, {
+          httpOnly: true,
+          secure: false,
+          sameSite: "lax",
+          path: "/",
+          maxAge: 7 * 24 * 60 * 60 * 1000,
+        });
+
+        res.send({
+          success: true,
+          insertedId: result.insertedId,
+          message: "Registration successful",
+        });
       } catch (error) {
         console.error("Error creating new user:", error);
         res.status(500).send("Internal Server Error");
@@ -104,10 +123,17 @@ async function run() {
           expiresIn: "7d",
         });
 
+        res.cookie("token", token, {
+          httpOnly: true,
+          secure: false, // keep false for localhost (HTTP)
+          sameSite: "lax",
+          path: "/", // 🔥 VERY IMPORTANT
+          maxAge: 7 * 24 * 60 * 60 * 1000,
+        });
+
         res.send({
+          success: true,
           message: "Login successful",
-          userId: user._id,
-          token: token,
         });
       } catch (error) {
         console.error("Error during login:", error);
@@ -115,9 +141,8 @@ async function run() {
       }
     });
 
-    app.post("/me", verifyToken, async (req, res) => {
+    app.get("/me", verifyToken, async (req, res) => {
       try {
-        const { userId } = req.body;
         const user = await usersCollection.findOne(
           { _id: new ObjectId(req.user.userId) },
           { projection: { password: 0 } },
@@ -130,6 +155,18 @@ async function run() {
         console.error("Error fetching user details:", error);
         res.status(500).send("Internal Server Error");
       }
+    });
+
+    app.post("/logout", (req, res) => {
+      res.clearCookie("token", {
+        httpOnly: true,
+        secure: false,
+        sameSite: "lax",
+      });
+      res.send({
+        success: true,
+        message: "Logout successful",
+      });
     });
 
     app.post("/watches", verifyToken, async (req, res) => {
