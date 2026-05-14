@@ -164,6 +164,54 @@ async function run() {
       });
     });
 
+    app.post("/google-login", async (req, res) => {
+      try {
+        const { name, email } = req.body;
+
+        let user = await usersCollection.findOne({ email });
+        if (!user) {
+          const newUser = {
+            name,
+            email,
+            role: "user",
+            createdAt: new Date(),
+          };
+
+          const result = await usersCollection.insertOne(newUser);
+
+          user = {
+            _id: result.insertedId,
+            ...newUser,
+          };
+        }
+        const token = jwt.sign({ userId: user._id }, process.env.SECRET_KEY, {
+          expiresIn: "7d",
+        });
+
+        res.cookie("token", token, {
+          httpOnly: true,
+          secure: false,
+          sameSite: "lax",
+          path: "/",
+          maxAge: 7 * 24 * 60 * 60 * 1000,
+        });
+
+        res.send({
+          success: true,
+          user: {
+            _id: user._id,
+            name: user.name,
+            email: user.email,
+            role: user.role,
+            createdAt: user.createdAt,
+          },
+        });
+      } catch (error) {
+        console.error("Google login error:", error);
+        res.status(500).send("Internal Server Error");
+      }
+    });
+
     app.post("/watches", verifyToken, async (req, res) => {
       try {
         const watch = req.body;
