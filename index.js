@@ -44,19 +44,29 @@ const verifyToken = (req, res, next) => {
   }
 };
 
+const verifyAdmin = async (req, res, next) => {
+  try {
+    const email = req.user.email;
+    const user = await usersCollection.findOne({ email });
+    if (user.role !== "admin") {
+      return res.status(403).send({ message: "Forbidden" });
+    }
+    next();
+  } catch (error) {
+    res.status(500).send({ message: "Internal Server Error" });
+  }
+};
+
 async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
     await client.connect();
 
-    const watchCollection = client.db("nextECommerce").collection("watches");
-    const clockCollection = client.db("nextECommerce").collection("clocks");
-    const fansCollection = client.db("nextECommerce").collection("fans");
     const usersCollection = client.db("nextECommerce").collection("users");
     const cartsCollection = client.db("nextECommerce").collection("carts");
-    const trendingsCollection = client
+    const productsCollection = client
       .db("nextECommerce")
-      .collection("trendings");
+      .collection("products");
 
     app.post("/users", async (req, res) => {
       try {
@@ -114,15 +124,19 @@ async function run() {
           return res.status(400).send({ message: "Invalid email or password" });
         }
 
-        const token = jwt.sign({ userId: user._id }, process.env.SECRET_KEY, {
-          expiresIn: "7d",
-        });
+        const token = jwt.sign(
+          { userId: user._id, email: user.email },
+          process.env.SECRET_KEY,
+          {
+            expiresIn: "7d",
+          },
+        );
 
         res.cookie("token", token, {
           httpOnly: true,
-          secure: false, // keep false for localhost (HTTP)
+          secure: false,
           sameSite: "lax",
-          path: "/", // 🔥 VERY IMPORTANT
+          path: "/",
           maxAge: 7 * 24 * 60 * 60 * 1000,
         });
 
@@ -212,105 +226,29 @@ async function run() {
       }
     });
 
-    app.post("/watches", verifyToken, async (req, res) => {
-      try {
-        const watch = req.body;
-
-        const result = await watchCollection.insertOne(watch);
-        res.send(result);
-      } catch (error) {
-        console.error("Error inserting watch:", error);
-        res.status(500).send("Internal Server Error");
-      }
-    });
-    app.get("/watches", async (req, res) => {
-      try {
-        const watches = await watchCollection.find().toArray();
-        res.send(watches);
-      } catch (error) {
-        console.error("Error fetching watches:", error);
-        res.status(500).send("Internal Server Error");
-      }
-    });
-
-    app.post("/clocks", verifyToken, async (req, res) => {
-      try {
-        const clock = req.body;
-        const result = await clockCollection.insertOne(clock);
-        res.send(result);
-      } catch (error) {
-        console.error("Error inserting clock:", error);
-        res.status(500).send("Internal Server Error");
-      }
-    });
-    app.get("/clocks", async (req, res) => {
-      try {
-        const clocks = await clockCollection.find().toArray();
-        res.send(clocks);
-      } catch (error) {
-        console.error("Error fetching clocks:", error);
-        res.status(500).send("Internal Server Error");
-      }
-    });
-
-    app.post("/fans", verifyToken, async (req, res) => {
-      try {
-        const fan = req.body;
-        const result = await fansCollection.insertOne(fan);
-        res.send(result);
-      } catch (error) {
-        console.error("Error inserting fan:", error);
-        res.status(500).send("Internal Server Error");
-      }
-    });
-    app.get("/fans", async (req, res) => {
-      try {
-        const fans = await fansCollection.find().toArray();
-        res.send(fans);
-      } catch (error) {
-        console.error("Error fetching fans:", error);
-        res.status(500).send("Internal Server Error");
-      }
-    });
-
-    app.post("/trendings", verifyToken, async (req, res) => {
-      try {
-        const trending = req.body;
-        const result = await trendingsCollection.insertOne(trending);
-        res.send(result);
-      } catch (error) {
-        console.error("Error inserting trending item:", error);
-        res.status(500).send("Internal Server Error");
-      }
-    });
-    app.get("/trendings", async (req, res) => {
-      try {
-        const trendings = await trendingsCollection.find().toArray();
-        res.send(trendings);
-      } catch (error) {
-        console.error("Error fetching trending items:", error);
-        res.status(500).send("Internal Server Error");
-      }
-    });
-
     app.post("/carts", verifyToken, async (req, res) => {
       try {
         const userId = req.user.userId;
-        const { productId, quantity } = req.body;
+        const { productId, quantity = 1 } = req.body;
 
         const existingCart = await cartsCollection.findOne({
-          productId,
           userId,
+          productId,
         });
 
         if (existingCart) {
           const updated = await cartsCollection.updateOne(
             { _id: existingCart._id },
-            { $inc: { quantity: quantity } },
+            { $inc: { quantity } },
           );
           return res.send(updated);
         } else {
-          const result = await cartsCollection.insertOne(req.body);
+          const result = await cartsCollection.insertOne({
+            userId,
+            productId,
+            quantity: quantity || 1,
+            createdAt: new Date(),
+          });
           return res.send(result);
         }
       } catch (error) {
@@ -319,30 +257,76 @@ async function run() {
       }
     });
 
-    app.get("/carts/:userId", verifyToken, async (req, res) => {
-      const userId = req.user.userId;
-      const result = await cartsCollection.find({ userId }).toArray();
-      res.send(result);
+    app.get("/carts", verifyToken, async (req, res) => {
+      try {
+        const userId = req.user.userId;
+        const carts = await cartsCollection.find({ userId }).toArray();
+        const productIds = carts.map((cart) => new ObjectId(cart.productId));
+
+        const products = await productsCollection
+          .find({ _id: { $in: productIds } })
+          .toArray();
+
+        const results = carts
+          .map((cart) => {
+            const product = products.find(
+              (p) => p._id.toString() === cart.productId,
+            );
+
+            if (!product) return null;
+
+            return {
+              _id: cart._id,
+              productId: cart.productId,
+              name: product.name,
+              price: product.price,
+              image: product.image,
+              quantity: cart.quantity,
+            };
+          })
+          .filter(Boolean);
+
+        res.send(results);
+      } catch (error) {
+        res.status(500).send("Error fetching cart");
+      }
     });
 
     app.delete("/carts/:id", verifyToken, async (req, res) => {
+      const userId = req.user.userId;
       const id = req.params.id;
+
       const result = await cartsCollection.deleteOne({
         _id: new ObjectId(id),
+        userId,
       });
+
       res.send(result);
     });
 
     app.patch("/carts/:id", verifyToken, async (req, res) => {
+      const userId = req.user.userId;
       const id = req.params.id;
       const { quantity } = req.body;
 
       const result = await cartsCollection.updateOne(
-        { _id: new ObjectId(id) },
-        { $set: { quantity } },
+        { _id: new ObjectId(id), userId },
+        { $set: { quantity: quantity || 1 } },
       );
 
       res.send(result);
+    });
+
+    app.get("/products", async (req, res) => {
+      try {
+        const { category } = req.query;
+        const filter = category ? { category } : {};
+        const products = await productsCollection.find(filter).toArray();
+        res.send(products);
+      } catch (error) {
+        console.error("Error fetching products:", error);
+        res.status(500).send("Internal Server Error");
+      }
     });
 
     // Send a ping to confirm a successful connection
