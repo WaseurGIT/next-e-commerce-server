@@ -12,6 +12,8 @@ app.use(
   cors({
     origin: "http://localhost:3000",
     credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+    allowedHeaders: ["Content-Type", "Authorization"],
   }),
 );
 app.use(express.json());
@@ -44,19 +46,6 @@ const verifyToken = (req, res, next) => {
   }
 };
 
-const verifyAdmin = async (req, res, next) => {
-  try {
-    const email = req.user.email;
-    const user = await usersCollection.findOne({ email });
-    if (user.role !== "admin") {
-      return res.status(403).send({ message: "Forbidden" });
-    }
-    next();
-  } catch (error) {
-    res.status(500).send({ message: "Internal Server Error" });
-  }
-};
-
 async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
@@ -67,6 +56,19 @@ async function run() {
     const productsCollection = client
       .db("nextECommerce")
       .collection("products");
+
+    const verifyAdmin = async (req, res, next) => {
+      try {
+        const email = req.user.email;
+        const user = await usersCollection.findOne({ email });
+        if (user.role !== "admin") {
+          return res.status(403).send({ message: "Forbidden" });
+        }
+        next();
+      } catch (error) {
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    };
 
     app.post("/users", async (req, res) => {
       try {
@@ -108,6 +110,18 @@ async function run() {
         });
       } catch (error) {
         console.error("Error creating new user:", error);
+        res.status(500).send("Internal Server Error");
+      }
+    });
+
+    app.get("/users", verifyToken, verifyAdmin, async (req, res) => {
+      try {
+        const users = await usersCollection
+          .find({}, { projection: { password: 0 } })
+          .toArray();
+        res.send(users);
+      } catch (error) {
+        console.error("Error fetching users:", error);
         res.status(500).send("Internal Server Error");
       }
     });
@@ -198,9 +212,13 @@ async function run() {
             ...newUser,
           };
         }
-        const token = jwt.sign({ userId: user._id }, process.env.SECRET_KEY, {
-          expiresIn: "7d",
-        });
+        const token = jwt.sign(
+          { userId: user._id, email: user.email },
+          process.env.SECRET_KEY,
+          {
+            expiresIn: "7d",
+          },
+        );
 
         res.cookie("token", token, {
           httpOnly: true,
@@ -325,6 +343,35 @@ async function run() {
         res.send(products);
       } catch (error) {
         console.error("Error fetching products:", error);
+        res.status(500).send("Internal Server Error");
+      }
+    });
+
+    app.post("/products", verifyToken, verifyAdmin, async (req, res) => {
+      try {
+        const { name, price, image, category } = req.body;
+        if (!name || !price || !image || !category) {
+          return res.status(400).send({ message: "All fields are required" });
+        }
+
+        const newProduct = {
+          name,
+          price,
+          image,
+          category,
+          createdAt: new Date(),
+        };
+
+        const result = await productsCollection.insertOne(newProduct);
+        res.send({
+          success: true,
+          product: {
+            _id: result.insertedId,
+            ...newProduct,
+          },
+        });
+      } catch (error) {
+        console.error("Error creating product:", error);
         res.status(500).send("Internal Server Error");
       }
     });
